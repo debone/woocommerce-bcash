@@ -470,8 +470,46 @@ class WC_BCash_Gateway extends WC_Payment_Gateway {
 		@ob_clean();
 
 		if ( ! empty( $_POST ) && ! empty( $this->token ) && $this->check_ipn_request_is_valid() ) {
+			$posted = stripslashes_deep( $_POST );
+
+			// When transacao_id is set we need to retrieve order information
+			// from a second secured source (Pagamento Digital url)
+			if(isset($posted['transacao_id'])){
+				// Post order id to retrieve order information
+				$postdata  = 'id_transacao=' . $posted['transacao_id'];
+				$postdata .= '&tipo_retorno=2'; //JSON
+
+				$params = array(
+					'body' => $postdata,
+					'headers' => array(
+						'Authorization' => 'Basic ' . base64_encode($this->email.':'.$this->token)
+					),
+					'sslverify'     => false,
+					'timeout'       => 60
+				);
+				$response = wp_remote_post( $this->consulta_url, $params );
+
+				if ( 'yes' == $this->debug ) {
+					$this->log->add( 'bcash', 'CONSULTA Response: ' . print_r( $response, true ) );
+				}
+
+				if ( ! is_wp_error( $response ) && $response['response']['code'] >= 200 && $response['response']['code'] < 300 ) {
+					// Decoding order data to array
+					$posted = json_decode($response['body'], true);
+					$posted = $posted['transacao'];
+					// There are 7 states on "URL de aviso" returns
+					$posted['status_url_aviso'] = true;
+				} else {
+					if ( 'yes' == $this->debug ) {
+						$this->log->add( 'bcash', 'Received invalid IPN response from Bcash' );
+					}
+					wp_die( __( 'Bcash Bad Request', 'woocommerce-bcash' ) );
+				}
+			}
+
 			header( 'HTTP/1.1 200 OK' );
-			do_action( 'valid_bcash_ipn_request', stripslashes_deep( $_POST ) );
+			do_action( 'valid_bcash_ipn_request', $posted );
+
 		} else {
 			wp_die( __( 'Bcash Request Failure', 'woocommerce-bcash' ) );
 		}
@@ -485,33 +523,6 @@ class WC_BCash_Gateway extends WC_Payment_Gateway {
 	 * @return void
 	 */
 	public function successful_request( $posted ) {
-		// When transacao_id is set we need to retrieve order information
-		// from a second secured source (Pagamento Digital url)
-		if(isset($posted['transacao_id'])){
-			// Post order id to retrieve order information
-			$postdata  = 'id_transacao=' . $posted['transacao_id'];
-			$postdata .= '&tipo_retorno=2'; //JSON
-
-			$params = array(
-				'body' => $postdata,
-				'headers' => array(
-					'Authorization' => 'Basic ' . base64_encode($this->email.':'.$this->token)
-				),
-				'sslverify'     => false,
-				'timeout'       => 60
-			);
-			$response = wp_remote_post( $this->consulta_url, $params );
-
-			if ( 'yes' == $this->debug ) {
-				$this->log->add( 'bcash', 'CONSULTA Response: ' . print_r( $response, true ) );
-			}
-
-			// Decoding order data to array
-			$posted = json_decode($response['body'], true);
-			$posted = $posted['transacao'];
-			// There are 7 states on "URL de aviso" returns
-			$posted['status_url_aviso'] = true;
-		}
 
 		if ( ! empty( $posted['id_pedido'] ) ) {
 			$order_key = $posted['id_pedido'];
